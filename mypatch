@@ -1,0 +1,510 @@
+diff --git a/linux-3.18.77/arch/x86/syscalls/syscall_64.tbl b/linux-3.18.77/arch/x86/syscalls/syscall_64.tbl
+index 281150b5..cae04a0e 100644
+--- a/linux-3.18.77/arch/x86/syscalls/syscall_64.tbl
++++ b/linux-3.18.77/arch/x86/syscalls/syscall_64.tbl
+@@ -187,11 +187,11 @@
+ 178	64	query_module
+ 179	common	quotactl		sys_quotactl
+ 180	64	nfsservctl
+-181	common	getpmsg
+-182	common	putpmsg
+-183	common	afs_syscall
+-184	common	tuxcall
+-185	common	security
++181	common	doeventopen     sys_doeventopen
++182	common	doeventclose    sys_doeventclose
++183	common	doeventwait     sys_doeventwait
++184	common	doeventsig      sys_doeventsig
++185	common	doeventinfo     sys_doeventinfo
+ 186	common	gettid			sys_gettid
+ 187	common	readahead		sys_readahead
+ 188	common	setxattr		sys_setxattr
+@@ -211,16 +211,16 @@
+ 202	common	futex			sys_futex
+ 203	common	sched_setaffinity	sys_sched_setaffinity
+ 204	common	sched_getaffinity	sys_sched_getaffinity
+-205	64	set_thread_area
++205	common  doeventchown    sys_doeventchown
+ 206	64	io_setup		sys_io_setup
+ 207	common	io_destroy		sys_io_destroy
+ 208	common	io_getevents		sys_io_getevents
+ 209	64	io_submit		sys_io_submit
+ 210	common	io_cancel		sys_io_cancel
+-211	64	get_thread_area
++211	common  doeventchmod    sys_doeventchmod
+ 212	common	lookup_dcookie		sys_lookup_dcookie
+ 213	common	epoll_create		sys_epoll_create
+-214	64	epoll_ctl_old
++214	common  doeventstat     sys_doeventstat
+ 215	64	epoll_wait_old
+ 216	common	remap_file_pages	sys_remap_file_pages
+ 217	common	getdents64		sys_getdents64
+diff --git a/linux-3.18.77/include/linux/event.h b/linux-3.18.77/include/linux/event.h
+new file mode 100755
+index 00000000..e7f4f697
+--- /dev/null
++++ b/linux-3.18.77/include/linux/event.h
+@@ -0,0 +1,25 @@
++#ifndef _EVENT_H
++#define _EVENT_H
++
++#include <linux/types.h>
++#include <linux/wait.h>
++#include <linux/list.h>
++
++struct event 
++{
++	int event_id;
++	uid_t UID;			// equal to effective UID of the process creator
++	gid_t GID;			// equal to effective GID of the process creator
++	int UID_enable;     // (default 1) enable process of equal UID to signal/close the event
++	int GID_enable;     // (default 1) enable process of equal GID to signal/close the event
++
++	int sig;            // (born 1) indicate whether the event is signaled by any process (0-no, 1-yes)
++	wait_queue_head_t wq_process;	// waiting queue for the event
++					
++	struct list_head list_event;	// kernel list structure -- connect all the event
++};
++
++/* event init function (call in kernel boost) */
++void __init doevent_init(void);
++
++#endif
+diff --git a/linux-3.18.77/include/linux/syscalls.h b/linux-3.18.77/include/linux/syscalls.h
+index bda9b813..a49807c7 100644
+--- a/linux-3.18.77/include/linux/syscalls.h
++++ b/linux-3.18.77/include/linux/syscalls.h
+@@ -65,6 +65,7 @@ struct old_linux_dirent;
+ struct perf_event_attr;
+ struct file_handle;
+ struct sigaltstack;
++struct event;
+ union bpf_attr;
+ 
+ #include <linux/types.h>
+@@ -79,6 +80,7 @@ union bpf_attr;
+ #include <linux/quota.h>
+ #include <linux/key.h>
+ #include <trace/syscall.h>
++#include <linux/event.h>
+ 
+ /*
+  * __MAP - apply a macro to syscall arguments
+@@ -877,4 +879,12 @@ asmlinkage long sys_seccomp(unsigned int op, unsigned int flags,
+ asmlinkage long sys_getrandom(char __user *buf, size_t count,
+ 			      unsigned int flags);
+ asmlinkage long sys_bpf(int cmd, union bpf_attr *attr, unsigned int size);
++asmlinkage long sys_doeventopen(void);
++asmlinkage long sys_doeventclose(int event_id);
++asmlinkage long sys_doeventwait(int event_id);
++asmlinkage long sys_doeventsig(int event_id);
++asmlinkage long sys_doeventinfo(int num, int *event_ids);
++asmlinkage long sys_doeventchown(int event_id, uid_t UID, gid_t GID);
++asmlinkage long sys_doeventchmod(int event_id, int UID_enable, int GID_enable);
++asmlinkage long sys_doeventstat(int event_id, uid_t *UID, gid_t *GID, int *UID_enable, int *GID_enable);
+ #endif
+diff --git a/linux-3.18.77/init/main.c b/linux-3.18.77/init/main.c
+index 32940a68..424a3291 100644
+--- a/linux-3.18.77/init/main.c
++++ b/linux-3.18.77/init/main.c
+@@ -78,6 +78,7 @@
+ #include <linux/context_tracking.h>
+ #include <linux/random.h>
+ #include <linux/list.h>
++#include <linux/event.h>
+ 
+ #include <asm/io.h>
+ #include <asm/bugs.h>
+@@ -94,6 +95,7 @@ static int kernel_init(void *);
+ extern void init_IRQ(void);
+ extern void fork_init(unsigned long);
+ extern void radix_tree_init(void);
++extern void doevent_init(void);
+ #ifndef CONFIG_DEBUG_RODATA
+ static inline void mark_rodata_ro(void) { }
+ #endif
+@@ -677,6 +679,8 @@ asmlinkage __visible void __init start_kernel(void)
+ 
+ 	ftrace_init();
+ 
++    /* init event */
++    doevent_init();
+ 	/* Do the rest non-__init'ed, we're now alive */
+ 	rest_init();
+ }
+diff --git a/linux-3.18.77/kernel/sys.c b/linux-3.18.77/kernel/sys.c
+index 1eaa2f0b..404aaf32 100644
+--- a/linux-3.18.77/kernel/sys.c
++++ b/linux-3.18.77/kernel/sys.c
+@@ -49,6 +49,7 @@
+ #include <linux/binfmts.h>
+ 
+ #include <linux/sched.h>
++#include <linux/mutex.h>
+ #include <linux/rcupdate.h>
+ #include <linux/uidgid.h>
+ #include <linux/cred.h>
+@@ -92,6 +93,7 @@
+ # define SET_TSC_CTL(a)		(-EINVAL)
+ #endif
+ 
++#define MAX_EVENTS 100000
+ /*
+  * this is where the system-wide overflow UID and GID are defined, for
+  * architectures that now have 32-bit UID/GID but didn't in the past
+@@ -2301,6 +2303,355 @@ SYSCALL_DEFINE1(sysinfo, struct sysinfo __user *, info)
+ 	return 0;
+ }
+ 
++/*event related global variables*/
++static int next_event_id;
++static int num_event;
++static LIST_HEAD(events);
++// private lock for each event
++struct mutex locks[MAX_EVENTS];
++// global lock for global variables
++static DEFINE_MUTEX(doevent_lock);
++
++/* init event info, called when boosting kernel
++ */
++void __init doevent_init(void)
++{
++    next_event_id = 0;
++    num_event = 0;
++    printk("Init Events, succeed.\n");
++}
++/* sys_doeventopen - creates a new event
++ * return event ID on success, -1 on failure. 
++ */
++SYSCALL_DEFINE0(doeventopen)
++{
++    struct event *new_event = (struct event *)kmalloc(sizeof(struct event), GFP_KERNEL);
++    
++    // new event fail
++    if(new_event == NULL)
++        return -1;
++
++    // assign new event content
++    new_event->UID = sys_geteuid();
++    new_event->GID = sys_getegid();
++    new_event->UID_enable = 1;
++    new_event->GID_enable = 1;
++    new_event->sig = 1;
++    init_waitqueue_head(&(new_event->wq_process));
++    INIT_LIST_HEAD(&new_event->list_event);
++
++    // operations that use global variables should use lock
++    mutex_lock(&doevent_lock);
++    if(next_event_id>MAX_EVENTS){
++        printk("Create too many events!\n");
++        return -1;
++    }
++
++    new_event->event_id = next_event_id;
++    next_event_id++;
++    list_add(&(new_event->list_event), &events);
++
++    mutex_init(&locks[new_event->event_id]);
++    num_event++;
++    mutex_unlock(&doevent_lock); 
++
++    return new_event->event_id;
++}
++/* helper function
++ * return event that matches the specified event_id
++ */
++static struct event * get_event(int event_id)
++{
++    struct event *evt;
++    list_for_each_entry(evt, &events, list_event){
++        if(evt->event_id==event_id)
++            return evt;
++    }
++
++    return NULL;
++}
++
++/* helper function
++ * implement access control to different operations on events
++ * operation id:
++ * #0 close
++ * #1 wait_sig
++ * #2 ch
++ */
++static bool access_control(struct event * evt, int operate)
++{
++    uid_t UID_proc = sys_geteuid();
++    gid_t GID_proc = sys_getegid();
++    
++    // Specific rules are defined in mp3-3.2
++    // rule 1-2, 7
++    if(UID_proc==0)
++        return true;
++    
++    if(UID_proc==evt->UID){
++        // rule 3-4
++        if(operate==0 || operate==1)
++            if(evt->UID_enable==1)
++                return true;
++        // rule 8
++        else
++            return true;
++    }
++    else if(GID_proc==evt->GID){
++        // rule 5-6
++        if(operate==0 || operate==1)
++            if(evt->GID_enable==1)
++                return true;
++    }
++    else
++        return false;
++}
++
++/* helper function
++ * return the length of a kernel list
++ */
++static int get_list_length(struct list_head * lh)
++{
++    int len = 0;
++
++    if(lh==NULL)
++        return -1;
++    
++    struct list_head * travs;
++    list_for_each(travs, lh)
++        len++;
++    return len;
++} 
++
++/* sys_doeventclose - destroy the event with the given event ID
++ * return number of processes signaled on success and -1 on failure.
++ */
++SYSCALL_DEFINE1(doeventclose, int, event_id)
++{
++    bool acc;   // permission to close
++    int num_wait_process;
++    mutex_lock(&doevent_lock);
++    
++    struct event *evt = get_event(event_id);
++    if(evt==NULL){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++
++    acc = access_control(evt, 0);
++    if(!acc){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++    mutex_unlock(&doevent_lock);
++
++    mutex_lock(&locks[event_id]);
++    // count the num of process waiting
++    num_wait_process = get_list_length(&(evt->wq_process.task_list));
++    evt->sig = 1;
++    // wake up only the processes in interruptible sleep
++    wake_up_interruptible(&(evt->wq_process)); 
++
++    list_del(&(evt->list_event));
++    kfree(evt);
++    num_event--;
++    //mutex_unlock(&doevent_lock);
++    mutex_unlock(&locks[event_id]);
++
++    return num_wait_process;
++} 
++
++/* sys_doeventwait - blocks process until the event is signaled
++ * return 1 on success and -1 on failure.
++ */
++SYSCALL_DEFINE1(doeventwait, int, event_id)
++{
++    bool acc;   // right to close
++
++    mutex_lock(&doevent_lock);
++    
++    struct event *evt = get_event(event_id);
++    if(evt==NULL){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++
++    acc = access_control(evt, 1);
++    if(!acc){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++    mutex_unlock(&doevent_lock);
++
++    mutex_lock(&locks[event_id]);
++    evt->sig = 0;
++    //mutex_unlock(&doevent_lock);
++    mutex_unlock(&locks[event_id]);
++    // add process to the wq
++    wait_event_interruptible(evt->wq_process, evt->sig==1);
++    
++    return 1;
++}
++
++/* sys_doeventsig - unblocks all waiting processes
++ * return number of processes signaled on success and -1 on failure.
++ */
++SYSCALL_DEFINE1(doeventsig, int, event_id)
++{
++    bool acc;   // right to close
++    int num_wait_process;
++
++    mutex_lock(&doevent_lock);
++    
++    struct event *evt = get_event(event_id);
++    if(evt==NULL){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++
++    acc = access_control(evt, 1);
++    if(!acc){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++    mutex_unlock(&doevent_lock);
++    
++    mutex_lock(&locks[event_id]);
++    // count the num of process waiting
++    num_wait_process = get_list_length(&(evt->wq_process.task_list));
++    evt->sig = 1;
++    wake_up_interruptible(&(evt->wq_process));
++    //mutex_unlock(&doevent_lock);
++    mutex_unlock(&locks[event_id]);
++
++    return num_wait_process;
++}
++
++/* sys_doeventinfo - fills in the event_ids array with the current set of active event IDs
++ * returns the number of active events and -1 on failure.
++ */
++SYSCALL_DEFINE2(doeventinfo, int, num, int *, event_ids)
++{
++    int ret;
++
++    if(num < num_event)
++        return -1;
++    if(event_ids == NULL)
++        return num_event;
++    if(num_event==0)
++        return num_event;
++
++    int *event_ids_from_ker = (int *)kmalloc(num_event*sizeof(int), GFP_KERNEL);
++
++    if(event_ids_from_ker==NULL)
++        return -1;
++
++    mutex_lock(&doevent_lock);
++    // traverse the event list
++    int idx = 0;
++    struct event *evt;
++    list_for_each_entry(evt, &events, list_event){
++        event_ids_from_ker[idx] = evt->event_id;
++        idx++;
++    }
++    mutex_unlock(&doevent_lock);
++
++    // copy data
++    ret = copy_to_user(event_ids, event_ids_from_ker, num_event*sizeof(int));
++    if(ret!=0)
++        return -1;
++
++    return idx;
++}
++
++/* sys_doeventchown - change the UID and GID of the event to the specified values
++ * returns -1 on failure.
++ */
++SYSCALL_DEFINE3(doeventchown, int, event_id, uid_t, UID, gid_t, GID)
++{
++    bool acc;   // right to close
++
++    mutex_lock(&doevent_lock);
++    
++    struct event *evt = get_event(event_id);
++    if(evt==NULL){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++
++    acc = access_control(evt, 2);
++    if(!acc){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++    mutex_unlock(&doevent_lock);
++
++    mutex_lock(&locks[event_id]);
++    evt->UID = UID;
++    evt->GID = GID;
++    //mutex_unlock(&doevent_lock);
++    mutex_unlock(&locks[event_id]);
++
++    return 1;
++}
++
++/* sys_doeventchmod - change the UID_enable and GID_enable
++ * returns -1 on failure.
++ */
++SYSCALL_DEFINE3(doeventchmod, int, event_id, int, UID_enable, int, GID_enable)
++{
++    bool acc;   // right to close
++
++    mutex_lock(&doevent_lock);
++    
++    struct event *evt = get_event(event_id);
++    if(evt==NULL){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++
++    acc = access_control(evt, 2);
++    if(!acc){
++        mutex_unlock(&doevent_lock);
++        return -1;
++    }
++    mutex_unlock(&doevent_lock);
++
++    mutex_lock(&locks[event_id]);
++    evt->UID_enable = UID_enable;
++    evt->GID_enable = GID_enable;
++    //mutex_unlock(&doevent_lock);
++    mutex_unlock(&locks[event_id]);
++
++    return 1;
++}
++
++/* sys_doeventstat - place all the event info into memory pointed by the pointers
++ * returns -1 on failure.
++ */
++SYSCALL_DEFINE5(doeventstat, int, event_id, uid_t *, UID, gid_t *, GID, int *, UID_enable, int *, GID_enable)
++{
++    int ret[4];
++
++    mutex_lock(&doevent_lock);
++    struct event *evt = get_event(event_id);
++    mutex_unlock(&doevent_lock);
++
++    if(evt==NULL)
++        return -1;
++
++    ret[0] = copy_to_user(UID, &(evt->UID), sizeof(uid_t)); 
++    ret[1] = copy_to_user(GID, &(evt->UID), sizeof(uid_t)); 
++    ret[2] = copy_to_user(UID_enable, &(evt->UID_enable), sizeof(int)); 
++    ret[3] = copy_to_user(GID_enable, &(evt->GID_enable), sizeof(int)); 
++
++    // all should return 0 for suceess
++    if((ret[0] + ret[1] + ret[2] + ret[3])!=0)
++        return -1;
++
++    return 1;
++}
++
+ #ifdef CONFIG_COMPAT
+ struct compat_sysinfo {
+ 	s32 uptime;
