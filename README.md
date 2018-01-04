@@ -3,8 +3,8 @@
 Modified and added files to linux source code
 
 Modified File 1: /linux-3.18.77/arch/x86/syscalls/syscall_64.tbl
---
-Assign each syscall number
+
+--Assign each syscall number
 
 181	common	doeventopen     sys_doeventopen
 
