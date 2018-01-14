@@ -18,9 +18,9 @@ Events are global identifiers; processes that did not create an event (and are n
 * long doeventwait(int eventID); Blocks process until the event is signaled. Return 1 on success and -1 on failure.
 * long doeventsig(int eventID); Unblocks all waiting processes; ignored if no processes are blocked. Return number of processes signaled on success and -1 on failure.
 * long doeventinfo(int num, int * eventIDs); Fills in the array of integers pointed to by eventIDs with the current set of active event IDs. num is the number of integers which the memory pointed to by eventIDs can hold. eventIDs can be NULL, in which case, doeventinfo() returns the number of active event IDs. On success, doeventinfo() returns the number of active events; otherwise, it returns -1 on failure. If num is smaller than the number of active event IDs, then -1 should be returned.
-* long doeventchown(int eventID, uid t UID, gid t GID); Change the UID and GID of the event to the specified values; returns -1 on failure.
+* long doeventchown(int eventID, uid_t UID, gid_t GID); Change the UID and GID of the event to the specified values; returns -1 on failure.
 * long doeventchmod (int eventID, int UIDFlag, int GIDFlag); Change the User Signal Enable Bit to UIDFlag and the Group Signal Enable Bit to GIDFlag; returns -1 on failure.
-* long doeventstat (int eventID, uid t * UID, gid t * GID, int * UIDFlag, int * GIDFlag); Place the UID, GID, User Signal Enable Bit, and Group Signal Enable Bit into the memory pointed to by UID, GID, UIDFlag, and GIDFlag, respectively; returns -1 on failure.
+* long doeventstat (int eventID, uid_t * UID, gid_t * GID, int * UIDFlag, int * GIDFlag); Place the UID, GID, User Signal Enable Bit, and Group Signal Enable Bit into the memory pointed to by UID, GID, UIDFlag, and GIDFlag, respectively; returns -1 on failure.
 
 ## Modified and added files to linux source code
 
